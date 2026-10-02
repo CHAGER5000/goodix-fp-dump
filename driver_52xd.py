@@ -5,6 +5,7 @@ import re
 import socket
 import struct
 import subprocess
+import time
 
 import goodix
 import protocol
@@ -41,6 +42,14 @@ DEVICE_POV_CONFIG = bytes.fromhex(
 
 SENSOR_WIDTH = 80
 SENSOR_HEIGHT = 64
+
+# FDT mode with zeroed thresholds, the reply holds the 8 FDT region values
+FDT_REPORT_MODE = (b"\x0d\x01\x27\x01\x21\x01\x27\x01\x23\x01" +
+                   b"\x00" * 16 + b"\x01")
+
+# A finger lowers every FDT region value by ~45 or more (noise is ~1)
+FINGER_DELTA = 20
+FINGER_REGIONS = 4
 
 
 def init_device(product: int):
@@ -111,6 +120,29 @@ def update_firmware(device: goodix.Device):
 
     device.reset(False, True, 50)
     device.disconnect()
+
+
+def read_fdt_values(device: goodix.Device):
+    reply = device.mcu_switch_to_fdt_mode(FDT_REPORT_MODE, True)
+
+    if len(reply) < 20:
+        raise SystemError("Invalid response length")
+
+    return struct.unpack("<8H", reply[4:20])
+
+
+def wait_for_finger(device: goodix.Device):
+    # The FDT down event fires immediately on the 521d, so poll the FDT
+    # values instead and compare them with a baseline taken without finger
+    base = read_fdt_values(device)
+
+    while True:
+        time.sleep(0.2)
+
+        values = read_fdt_values(device)
+        if sum(old - new > FINGER_DELTA
+               for old, new in zip(base, values)) >= FINGER_REGIONS:
+            return
 
 
 def run_driver(device: goodix.Device):
@@ -277,12 +309,7 @@ def run_driver(device: goodix.Device):
 
             print("Waiting for finger...")
 
-            device.mcu_switch_to_fdt_down(
-                b"\x9c\x01\x27\x01\x21\x01\x27\x01"
-                b"\x23\x01\x8d\x8d\x86\x86\x97\x97"
-                b"\x8f\x8f\x9b\x9b\x92\x92\x96\x96"
-                b"\x8c\x8c\x01\x00\x05\x03\xa7\x00"
-                b"\xa1\x00\xa7\x00\xa3\x00\x00", True)
+            wait_for_finger(device)
 
             device.mcu_switch_to_fdt_mode(
                 b"\x0d\x01\x27\x01\x21\x01\x27\x01"
