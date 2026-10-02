@@ -131,7 +131,7 @@ def run_driver(device: goodix.Device):
         otp = device.read_otp()
 
         if len(otp) < 64:
-            raise ValueError("Invalid OTP")
+            print(tool.warning(f"Invalid OTP (got {len(otp)} bytes)"))
 
         # OTP 1: 4e4c4d31372e0000b9828da2a2d73e09
         #        08196896800000ee6014a774a060b614
@@ -186,9 +186,11 @@ def run_driver(device: goodix.Device):
                     b"\x81\x03\x27\x01\x21\x01\x27\x01\x23\x01",
                     goodix.FLAGS_TRANSPORT_LAYER_SECURITY_DATA)[9:])
 
-            tool.write_pgm(
-                tool.decode_image(tls_server.stdout.read(7684)[:-4]),
-                SENSOR_WIDTH, SENSOR_HEIGHT, "clear-1.pgm")
+            background = tool.decode_image(
+                tls_server.stdout.read(7684)[:-4])
+
+            tool.write_pgm(background, SENSOR_WIDTH, SENSOR_HEIGHT,
+                           "clear-1.pgm")
 
             device.write_sensor_register(0x022c, b"\x0a\x02")
 
@@ -294,16 +296,27 @@ def run_driver(device: goodix.Device):
                 b"\x8f\x8f\x9b\x9b\x92\x92\x96\x96"
                 b"\x8c\x8c\x01", True)
 
-            device.write_sensor_register(0x022c, b"\x05\x03")
+            # The 0x45/0xa7 capture saturates the 521d, use the clear frame
+            # parameters instead
+            device.write_sensor_register(0x022c, b"\x0a\x03")
 
             tls_client.sendall(
                 device.mcu_get_image(
-                    b"\x45\x03\xa7\x00\xa1\x00\xa7\x00\xa3\x00",
+                    b"\x81\x03\x27\x01\x21\x01\x27\x01\x23\x01",
                     goodix.FLAGS_TRANSPORT_LAYER_SECURITY_DATA)[9:])
 
-            tool.write_pgm(
-                tool.decode_image(tls_server.stdout.read(7684)[:-4]),
-                SENSOR_WIDTH, SENSOR_HEIGHT, "fingerprint.pgm")
+            fingerprint = tool.decode_image(
+                tls_server.stdout.read(7684)[:-4])
+
+            tool.write_pgm(fingerprint, SENSOR_WIDTH, SENSOR_HEIGHT,
+                           "fingerprint-raw.pgm")
+
+            # Ridges are much weaker than the sensor fixed pattern, subtract
+            # the clear frame (centered on 2048)
+            tool.write_pgm([
+                min(max(value - offset + 2048, 0), 4095)
+                for value, offset in zip(fingerprint, background)
+            ], SENSOR_WIDTH, SENSOR_HEIGHT, "fingerprint.pgm")
 
         finally:
             tls_client.close()
